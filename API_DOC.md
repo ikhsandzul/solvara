@@ -47,8 +47,7 @@ Public. Rate-limited: 10/min.
       "id": 1,
       "name": "Budi Santoso",
       "email": "budi@example.com",
-      "role": "citizen",
-      "created_at": "2025-01-01T00:00:00Z"
+      "role": "citizen"
     }
   }
 }
@@ -96,8 +95,7 @@ Auth required.
     "id": 1,
     "name": "Budi Santoso",
     "email": "budi@example.com",
-    "role": "citizen",
-    "created_at": "2025-01-01T00:00:00Z"
+    "role": "citizen"
   }
 }
 ```
@@ -152,27 +150,32 @@ Content-Type: `multipart/form-data`
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `category_id` | integer | Yes | Must be active category |
-| `title` | string | Yes | 5–200 chars |
-| `description` | string | Yes | 20–5000 chars |
-| `latitude` | numeric | No | -90 to 90 |
-| `longitude` | numeric | No | -180 to 180 |
+| `selected_category_id` | integer | No* | ID from `GET /categories` |
+| `category_code` | string | No* | Code from `GET /categories` (alternative to `selected_category_id`) |
+| `title` | string | No | Max 200 chars |
+| `description` | string | Yes | 20–2000 chars |
+| `latitude` | numeric | No | -90 to 90; required if `longitude` set |
+| `longitude` | numeric | No | -180 to 180; required if `latitude` set |
 | `address_text` | string | No | Max 500 chars |
-| `occurred_at` | date | No | ISO 8601, not in future |
-| `photos[]` | file | No | JPEG/PNG/WebP, max `REPORT_UPLOAD_MAX_KB` each, max `REPORT_MAX_IMAGES` files |
-| `idempotency_key` | string | No | UUID — repeat request returns original submission |
+| `occurred_at` | date | Yes | ISO 8601 date |
+| `gps_accuracy_m` | numeric | No | GPS accuracy in metres |
+| `attachments[]` | file | No | JPEG/PNG/WebP, max `REPORT_UPLOAD_MAX_KB` KB each, max `REPORT_MAX_IMAGES` files |
+| `idempotency_key` | string | No | Max 64 chars — repeat request returns same submission |
+
+\* Provide `selected_category_id` or `category_code`; neither is strictly required.
 
 **Response 202**
 ```json
 {
   "data": {
-    "id": "01HZ...",
-    "status": "received",
-    "title": "Jalan Berlubang di Depan Sekolah",
-    "received_at": "2025-01-01T00:00:00Z"
+    "submission_id": "01HZ...",
+    "status": "queued_for_moderation",
+    "message": "Laporan sedang memeriksa foto dan informasi yang dikirim."
   }
 }
 ```
+
+`status` is `manual_review` when no photo is attached (skips image gate).
 
 ---
 
@@ -184,28 +187,33 @@ Auth required. Citizens see only own submissions; officers see all.
 ```json
 {
   "data": {
-    "id": "01HZ...",
+    "submission_id": "01HZ...",
     "status": "accepted",
-    "title": "Jalan Berlubang di Depan Sekolah",
-    "category_id": 1,
     "description": "...",
-    "latitude": -6.2,
-    "longitude": 106.8,
-    "address_text": "Jl. Mawar No. 5",
-    "occurred_at": "2025-01-01",
-    "received_at": "2025-01-01T00:00:00Z",
-    "accepted_report_id": 42,
-    "moderation_result": {
-      "passed": true,
-      "rejection_reason": null,
-      "confidence": 0.97
+    "category": { "id": 1, "code": "JAL", "name": "Jalan Rusak" },
+    "location": {
+      "latitude": -6.2,
+      "longitude": 106.8,
+      "address_text": "Jl. Mawar No. 5"
     },
-    "similarity_matches": []
+    "occurred_at": "2025-01-01T00:00:00Z",
+    "received_at": "2025-01-01T00:00:00Z",
+    "report_id": 42,
+    "moderation": {
+      "decision": "approved",
+      "category": "Jalan Rusak"
+    },
+    "possible_matches": []
   }
 }
 ```
 
-`accepted_report_id` is non-null when `status = accepted`. Use it to fetch the official report via `GET /reports/{id}`.
+`report_id` is non-null when `status = accepted`. Use it to fetch the official report via `GET /reports/{id}`.
+
+`possible_matches` is only present when `status = duplicate_review`. Each item:
+```json
+{ "report_id": "42", "distance_m": 38.5, "reason": "Same location and category" }
+```
 
 ---
 
@@ -217,16 +225,19 @@ Used when citizen wants to confirm or dispute a duplicate flag before officer re
 **Request body**
 ```json
 {
-  "citizen_response": "not_duplicate",
+  "response": "different_issue",
+  "candidate_report_id": null,
   "note": "Ini beda lubang, yang itu sudah 3 bulan lalu."
 }
 ```
 
-`citizen_response` values: `not_duplicate` | `is_duplicate`.
+`response` values: `same_issue` | `different_issue`.
+
+When `response = same_issue`, provide `candidate_report_id` (string ID of the matching report from `possible_matches`).
 
 **Response 200**
 ```json
-{ "data": { "message": "Respons dicatat." } }
+{ "data": { "submission_id": "01HZ...", "status": "manual_review" } }
 ```
 
 ---
@@ -242,25 +253,24 @@ Content-Type: `multipart/form-data`
 
 **Fields** — same as `POST /report-submissions` minus `idempotency_key`.
 
-**Response 201**
+**Response 201** — `ReportResource` (see shapes reference).
+
+Key fields on a new report:
 ```json
 {
   "data": {
     "id": 1,
     "public_code": "SOL-2025-0001",
     "status": "submitted",
+    "analysis_status": "queued",
     "title": "...",
     "description": "...",
-    "category": { "id": 1, "name": "Jalan Rusak" },
-    "user": { "id": 3, "name": "Budi" },
-    "latitude": -6.2,
-    "longitude": 106.8,
-    "address_text": "...",
-    "occurred_at": "2025-01-01",
-    "analysis_status": "queued",
+    "category": { "id": 1, "code": "JAL", "name": "Jalan Rusak" },
+    "location": { "latitude": -6.2, "longitude": 106.8, "address_text": "..." },
+    "occurred_at": "2025-01-01T00:00:00Z",
     "attachments": [],
     "ai_analysis": null,
-    "priority_score": null,
+    "priority": null,
     "created_at": "2025-01-01T00:00:00Z",
     "updated_at": "2025-01-01T00:00:00Z"
   }
@@ -454,39 +464,58 @@ When `decision = confirm_duplicate`, `duplicate_of_report_id` (integer) is requi
   "status": "in_progress",
   "title": "Jalan Berlubang",
   "description": "...",
-  "category": { "id": 1, "name": "Jalan Rusak", "code": "JAL" },
-  "user": { "id": 3, "name": "Budi Santoso" },
-  "latitude": -6.2088,
-  "longitude": 106.8456,
-  "address_text": "Jl. Mawar No. 5",
-  "occurred_at": "2025-01-01",
   "analysis_status": "completed",
+  "category": { "id": 1, "code": "JAL", "name": "Jalan Rusak" },
+  "location": {
+    "latitude": -6.2088,
+    "longitude": 106.8456,
+    "address_text": "Jl. Mawar No. 5"
+  },
+  "occurred_at": "2025-01-01T00:00:00Z",
+  "created_at": "2025-01-01T00:00:00Z",
+  "updated_at": "2025-01-02T00:00:00Z",
   "attachments": [
     {
       "id": 10,
       "kind": "before_repair",
       "mime_type": "image/jpeg",
       "size_bytes": 204800,
-      "url": "/api/v1/attachments/10"
+      "url": "https://host/api/v1/attachments/10"
     }
   ],
   "ai_analysis": {
-    "suggested_category": "Jalan Rusak",
-    "urgency_level": "high",
+    "status": "completed",
+    "category_suggested": "Jalan Rusak",
     "summary": "...",
-    "recommendations": "...",
-    "status": "completed"
+    "keywords": ["jalan", "berlubang"],
+    "urgency_suggestion": "high",
+    "confidence_band": "high",
+    "pattern_insight": "...",
+    "recommended_next_step": "...",
+    "needs_human_review": false
   },
-  "priority_score": {
-    "final_score": 78,
-    "urgency_score": 30,
-    "impact_score": 25,
-    "wait_time_score": 23
+  "priority": {
+    "score": 78,
+    "band": "high",
+    "rules_version": "1.0"
   },
-  "created_at": "2025-01-01T00:00:00Z",
-  "updated_at": "2025-01-02T00:00:00Z"
+  "status_history": [
+    {
+      "old_status": "submitted",
+      "new_status": "accepted",
+      "actor_id": 2,
+      "note": null,
+      "created_at": "2025-01-01T01:00:00Z"
+    }
+  ],
+  "user_id": 3
 }
 ```
+
+Notes:
+- `user_id` is only present for officer/admin callers.
+- `ai_analysis` and `priority` are `null` when not yet computed.
+- `status_history` is only included when the relation is eager-loaded (detail endpoint, not list).
 
 ### Error codes
 
