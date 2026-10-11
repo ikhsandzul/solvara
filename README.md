@@ -1,15 +1,16 @@
 # Solvara — Backend Laravel MVP
 
-AI-Powered Civic Intelligence Platform. REST API for Flutter app and officer dashboard.
+AI-Powered Civic Intelligence Platform. REST API for Flutter citizen app + Livewire officer dashboard.
 
 ---
 
 ## Stack
 
-- **PHP** ^8.3 · **Laravel** 13 · **Laravel Sanctum** 4
+- **PHP** ^8.3 · **Laravel** 13 · **Laravel Sanctum** 4 · **Livewire** 4
 - **Database** MySQL (production) / SQLite in-memory (tests)
-- **Queue** Laravel database queue (sync in test)
-- **Storage** Laravel private disk for attachments
+- **Queue** Laravel database queue (`sync` in tests)
+- **Storage** Laravel `private` disk for all attachments
+- **Frontend** Blade + Livewire 4 + Tailwind CSS v4
 
 ---
 
@@ -20,41 +21,57 @@ AI-Powered Civic Intelligence Platform. REST API for Flutter app and officer das
 cp .env.example .env
 php artisan key:generate
 
-# 2. Configure DB in .env (MySQL recommended; SQLite works for dev)
+# 2. Configure DB in .env (MySQL recommended)
 # DB_CONNECTION=mysql
 # DB_HOST=127.0.0.1
 # DB_PORT=3306
-# DB_DATABASE=solvara
+# DB_DATABASE=solvara_db
 # DB_USERNAME=root
 # DB_PASSWORD=
 
-# 3. Install dependencies
+# 3. Install PHP dependencies
 composer install
 
-# 4. Run migrations
+# 4. Install Node dependencies and build dashboard assets
+npm install && npm run build
+
+# 5. Create storage link (for public assets if needed)
+php artisan storage:link
+
+# 6. Run migrations
 php artisan migrate
 
-# 5. Seed demo accounts and categories
+# 7. Seed demo accounts and categories
 php artisan db:seed
 
-# 6. Start server
+# 8. Start server
 php artisan serve
 
-# 7. Start queue worker (required for AI analysis)
+# 9. Start queue worker (required for AI analysis jobs)
 php artisan queue:work
 ```
+
+### Demo accounts (after seeding)
+
+| Email | Password | Role |
+|---|---|---|
+| `officer@solvara.id` | `password` | officer |
+| `admin@solvara.id` | `password` | admin |
+| `warga@solvara.id` | `password` | citizen |
+
+Officer dashboard: `http://localhost:8000/dashboard/login`
 
 ---
 
 ## Running tests
 
-Tests use SQLite in-memory; no extra DB setup needed.
+Tests use SQLite in-memory — no extra DB setup needed.
 
 ```bash
 php artisan test
 ```
 
-Expected result: **32 passed, 1 skipped** (skipped = Vite manifest check, unrelated to backend).
+Expected: **72 passed, 1 skipped** (skipped = `ExampleTest` which requires a Vite build).
 
 ---
 
@@ -62,86 +79,96 @@ Expected result: **32 passed, 1 skipped** (skipped = Vite manifest check, unrela
 
 | Variable | Required | Description |
 |---|---|---|
-| `APP_KEY` | Yes | Generated with `php artisan key:generate` |
+| `APP_KEY` | Yes | `php artisan key:generate` |
 | `DB_CONNECTION` | Yes | `mysql` or `sqlite` |
-| `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USERNAME` / `DB_PASSWORD` | For MySQL | Standard Laravel DB config |
+| `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USERNAME` / `DB_PASSWORD` | MySQL only | Standard Laravel DB config |
 | `QUEUE_CONNECTION` | Yes | `database` for production; `sync` for local dev |
-| `FILESYSTEM_DISK` | Yes | `local` (private attachments); use `s3` + AWS vars for cloud |
-| `LANGFLOW_SERVER_URL` | For AI | e.g. `https://your-langflow.ibm.com` |
-| `LANGFLOW_FLOW_ID` | For AI | UUID of the flow |
-| `LANGFLOW_API_KEY` | For AI | API key from Langflow panel |
-| `LANGFLOW_TIMEOUT_SECONDS` | Optional | Default `30` |
-| `MAX_ATTACHMENT_KB` | Optional | Default `5120` (5 MB per image) |
+| `SESSION_DRIVER` | Yes | `database` (default); `file` for simple local dev |
+| `LANGFLOW_BASE_URL` | For AI | Base URL of Langflow server, e.g. `https://langflow.ibm.com/api/v1/run/` |
+| `LANGFLOW_API_KEY` | For AI | API key from Langflow panel — **never commit real values** |
+| `LANGFLOW_IMAGE_GATE_FLOW_ID` | For AI | Flow A: image content gate |
+| `LANGFLOW_DUPLICATE_FLOW_ID` | For AI | Flow B: duplicate intelligence |
+| `LANGFLOW_TIMEOUT_SECONDS` | Optional | Default `45` |
+| `LANGFLOW_MAX_RETRIES` | Optional | Default `3` |
+| `LANGFLOW_CONNECT_TIMEOUT_SECONDS` | Optional | Default `5` |
+| `REPORT_UPLOAD_MAX_KB` | Optional | Max image size per file, default `10240` (10 MB) |
+| `REPORT_MAX_IMAGES` | Optional | Max images per submission, default `3` |
+| `REPORT_SUBMISSION_TEMP_TTL_HOURS` | Optional | Temp submission TTL before expiry, default `24` |
+| `REPORT_TEMP_DISK` | Optional | Disk for temp uploads, default `private` |
+| `REPORT_PERMANENT_DISK` | Optional | Disk for accepted report photos, default `private` |
+| `DUPLICATE_RADIUS_METERS` | Optional | Haversine search radius, default `100` |
+| `DUPLICATE_MAX_CANDIDATES` | Optional | Max nearby candidates sent to AI, default `10` |
+| `DUPLICATE_ACTIVE_LOOKBACK_DAYS` | Optional | Default `180` |
+| `DUPLICATE_HISTORY_LOOKBACK_DAYS` | Optional | Default `365` |
 
 Secrets must never appear in source code. Use `.env` or a secret manager.
 
 ---
 
-## API contract (`/api/v1`)
+## API reference
 
-| Method | Endpoint | Role | Description |
-|---|---|---|---|
-| POST | `/auth/register` | Public | Register citizen |
-| POST | `/auth/login` | Public | Login → token |
-| POST | `/auth/logout` | Any auth | Revoke token |
-| GET | `/auth/me` | Any auth | Current user profile |
-| GET | `/categories` | Any auth | Active categories |
-| POST | `/reports` | citizen | Create report (multipart) |
-| GET | `/reports` | citizen (own) / officer | List reports |
-| GET | `/reports/{id}` | owner / officer | Report detail |
-| POST | `/reports/{id}/feedback` | owner only | Submit feedback |
-| GET | `/attachments/{id}` | owner / officer | Download attachment (auth required) |
-| GET | `/officer/dashboard/summary` | officer / admin | Stats by status & category |
-| GET | `/officer/reports` | officer / admin | All reports with filter/sort/search |
-| PATCH | `/officer/reports/{id}/status` | officer / admin | Change status + note |
-| POST | `/officer/reports/{id}/verification` | officer / admin | Verify or reopen |
-
-Full response shapes match the PRD contract. Errors always return:
-```json
-{"error": {"code": "...", "message": "...", "fields": {}}}
-```
+See [`API_DOC.md`](API_DOC.md) for full endpoint details, request/response shapes, and error codes.
 
 ---
 
 ## Status flow
 
 ```
-submitted → needs_review → accepted → in_progress → resolved_pending_verification → verified
-                  ↓                                            ↕
-               rejected ←──────────────────────────────── reopened
+submitted → accepted → in_progress → resolved_pending_verification → verified
+                                              ↕
+                                           reopened
+              ↓
+           rejected
 ```
 
-Every transition writes an append-only record to `report_status_histories` inside a DB transaction.
+Every transition is written to `report_status_histories` (append-only, inside a DB transaction). Officers only can change status.
 
 ---
 
-## AI / Langflow integration
+## AI / Langflow integration (v2 pipeline)
 
-- `AnalyzeReportJob` dispatched async after report creation.
-- Sends sanitised payload (no PII, no photos) to `POST {LANGFLOW_SERVER_URL}/api/v1/run/{LANGFLOW_FLOW_ID}`.
-- Retries up to 3×; on exhaustion sets `analysis_status = failed` — report stays intact.
-- AI output is normalised and validated before storage in `ai_analyses`.
-- AI never changes report status; only officers can.
-- If `LANGFLOW_SERVER_URL` or `LANGFLOW_FLOW_ID` are not set, the job logs a warning and stops cleanly.
+Submissions pass through two async jobs before becoming official reports:
+
+1. **Flow A — Image Gate** (`RunImageGateJob`): validates photo content. Result: `approved`, `rejected`, or `manual_review`.
+2. **Flow B — Duplicate Intelligence** (`RunDuplicateIntelligenceJob`): checks spatial + semantic similarity against existing reports. Result: `no_duplicate`, `possible_duplicate`, or `manual_review`.
+
+If either flow is unconfigured or times out:
+- Job falls back to `manual_review` — an officer decides manually.
+- No submission is silently lost.
+- `analysis_runs` table records every attempt with `status` and raw response.
+
+AI never changes report status. Officers retain final authority.
 
 ---
 
-## Key files added
+## Key files
 
 | Path | Purpose |
 |---|---|
-| `routes/api.php` | All API routes |
-| `app/Models/` | User, Category, Report, AiAnalysis, PriorityScore, ReportAttachment, ReportStatusHistory, VerificationReview, ReportFeedback |
+| `routes/api.php` | All REST API routes (`/api/v1`) |
+| `routes/web.php` | Officer dashboard routes (`/dashboard`) |
+| `app/Models/` | All Eloquent models |
 | `app/Policies/ReportPolicy.php` | view / create / updateStatus / verify / feedback gates |
-| `app/Services/LangflowClient.php` | Langflow HTTP client + normalizer |
+| `app/Services/LangflowImageGateClient.php` | Flow A HTTP client |
+| `app/Services/LangflowDuplicateClient.php` | Flow B HTTP client |
+| `app/Services/LangflowResponseNormalizer.php` | Validates + strips hallucinated IDs from AI response |
 | `app/Services/PriorityScoreService.php` | Deterministic scoring (rules v1.0) |
 | `app/Services/ReportStatusService.php` | Validated status transitions + history |
-| `app/Jobs/AnalyzeReportJob.php` | Queue job for AI analysis |
-| `app/Http/Controllers/Api/V1/` | Auth, Category, Report, Attachment controllers |
-| `app/Http/Controllers/Api/V1/Officer/` | OfficerReportController |
+| `app/Services/FinalizeReportSubmissionService.php` | accept / reject / linkToExisting submission |
+| `app/Services/FindNearbyReportCandidates.php` | Haversine SQL spatial search |
+| `app/Jobs/RunImageGateJob.php` | Async: Flow A |
+| `app/Jobs/RunDuplicateIntelligenceJob.php` | Async: Flow B |
+| `app/Jobs/ExpireTemporarySubmissionsJob.php` | Scheduled hourly: removes stale submissions |
+| `app/Http/Controllers/Api/V1/` | Auth, Category, Report, Attachment, ReportSubmission controllers |
+| `app/Http/Controllers/Api/V1/Officer/` | OfficerReportController, OfficerSubmissionController |
+| `app/Http/Controllers/Dashboard/` | Web auth + attachment controllers |
+| `app/Livewire/` | DashboardOverview, ReportsList, ReportDetail, ModerationQueue, DuplicateQueue, ResolutionVerification |
 | `app/Http/Requests/` | Form request validators |
 | `app/Http/Resources/` | API response resources |
 | `config/langflow.php` | Langflow config (env-driven) |
-| `config/solvara.php` | App-specific config |
-| `database/migrations/2026_10_11_*` | 9 new migrations |
+| `config/solvara.php` | Upload limits, spatial config |
+| `database/migrations/` | 18 migrations |
+| `database/seeders/DatabaseSeeder.php` | 5 categories + 3 demo users |
 | `tests/Feature/Api/` | AuthTest, ReportTest, OfficerTest, LangflowTest, PriorityScoreTest |
+| `tests/Feature/Api/V2/` | SubmissionLifecycleTest, ImageGateJobTest, DuplicateIntelligenceJobTest, FinalizeAndCleanupTest |
+| `tests/Feature/Dashboard/DashboardTest.php` | 16 officer dashboard tests |
